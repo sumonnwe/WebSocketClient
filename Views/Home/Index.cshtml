@@ -1,0 +1,140 @@
+﻿@{
+    ViewData["Title"] = "Home Page";
+}
+<!--
+video canvas
+<canvas id="videoCanvas"></canvas>
+video canvas
+<script>
+    const canvas = document.getElementById('videoCanvas');
+    const ctx = canvas.getContext('2d');
+    const ws = new WebSocket('ws://localhost:8080');
+
+    ws.binaryType = 'arraybuffer';
+    ws.onmessage = (event) => {
+        const blob = new Blob([event.data], { type: 'image/jpeg' });
+        const img = new Image();
+        img.onload = () => {
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        };
+        img.src = URL.createObjectURL(blob);
+    };
+</script>
+-->
+
+<video id="video" autoplay muted controls></video>
+<script>
+    const video = document.getElementById('video');
+    const mediaSource = new MediaSource(); 
+    video.src = URL.createObjectURL(mediaSource);
+
+    //let blob;
+    //let videoUrl;
+
+    let sourceBuffer;
+    let bufferQueue = []; // Queue to hold data
+    let isSourceBufferUpdating = false;
+
+    const ws = new WebSocket('ws://localhost:8080'); // WebSocket server URL
+    ws.binaryType = 'blob';
+
+    let isAppending = false; // Flag to prevent multiple appends 
+
+     
+    mediaSource.addEventListener('sourceopen', () => {
+        console.log('MediaSource opened');  //1
+        sourceBuffer = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.42E01E, mp4a.40.2"'); // Adjust codec as needed
+
+
+
+        // Event listener to append next data chunk from the queue
+        sourceBuffer.addEventListener('updateend', () => {
+            console.log('Data appended successfully'); //5
+           
+            if (bufferQueue.length > 0) {
+                console.log("append next buffer"); //6
+                processBufferQueue();
+            } else isSourceBufferUpdating = false;
+        });
+
+
+        // WebSocket message handler
+        ws.onmessage = (event) => {
+            if (event.data instanceof Blob) {
+                const data = new Uint8Array(event.data);
+                const reader = new FileReader();
+
+                reader.onload = (e) => {
+                    console.log("Received data size:" + e.data + ", target result :  " + e.target.result);  //2
+                    const buffer = new Uint8Array(e.target.result);
+
+                    bufferQueue.push(buffer); // Add data to the queue
+                    console.log("buffer queue length : " + bufferQueue.length);
+
+
+                    if (!isSourceBufferUpdating && !sourceBuffer.updating) {
+                        console.log("sourceBuffer updating ... ");
+                        processBufferQueue();
+                        isSourceBufferUpdating = true;
+                    }
+                };
+                reader.readAsArrayBuffer(event.data);
+            }
+           else {
+                console.error('Unexpected message format:', event.data);
+            }
+        };
+        // Append data from the buffer queue
+        function processBufferQueue() {
+            if ( !sourceBuffer || isSourceBufferUpdating || bufferQueue.length === 0 )   return;
+
+            try {
+                isSourceBufferUpdating = true;
+                const nextChunk = bufferQueue.shift();
+                sourceBuffer.appendBuffer(nextChunk);
+                console.log('Appended chunk:', nextChunk.byteLength);
+            } catch (error) {
+                console.error('Error appending buffer:', error);
+                isSourceBufferUpdating = false;
+            }
+        }
+
+
+        ws.onerror = (error) => console.error('WebSocket error:', error);
+        //ws.onclose = () => console.log('WebSocket closed');
+
+        ws.onclose = () => {
+            // Combine chunks into a Blob when the WebSocket closes
+
+            console.log("close: bufferQueue: "+bufferQueue);
+            const blob = new Blob(bufferQueue, { type: 'video/mp4' });
+            const videoUrl = URL.createObjectURL(blob);
+            video.src = videoUrl;
+            video.controls = true;
+            //video.play();
+            //video.onloadeddata = () => {
+            //   URL.revokeObjectURL(videoUrl);
+            //};
+
+            console.log('WebSocket closed');
+        };
+        
+    });
+
+
+    // Function to append the next buffer from the queue
+    function appendNextBuffer() {
+        if (mediaSource.Open == true && bufferQueue.length > 0 && !sourceBuffer.updating) {
+            isAppending = true;
+            const buffer = bufferQueue.shift(); // Get the next chunk
+            try {
+                sourceBuffer.appendBuffer(buffer); 
+
+                console.log('Appended buffer of size:' + Buffer.byteLength(buffer) + " , sourceBuffer size: " + sourceBuffer.size); //4
+            } catch (e) {
+                console.error('Error appending buffer:', e);
+            }
+        }
+    }
+
+</script>  
